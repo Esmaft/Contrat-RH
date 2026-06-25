@@ -1,0 +1,21 @@
+# Images temporaires générées par l'OCR
+images_pretraitees/
+*.jpg
+*.png
+
+# Modèles IA (trop lourds pour Git)
+models/
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Dataset YOLOv8
+datasets/
+runs/
+
+# Pages converties temporaires
+page_*.jpg
