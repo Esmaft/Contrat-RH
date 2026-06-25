@@ -14,7 +14,6 @@ app = FastAPI(title="API Verification Contrats RH", version="1.0")
 
 @app.post("/api/version1/verify")
 async def verifier_contrat(
-    id_contrat: str = Form(...),
     fichier: UploadFile = File(...),
     donnees_rh: str = Form(...)
 ):
@@ -27,6 +26,10 @@ async def verifier_contrat(
 
     try:
         champs_rh = json.loads(donnees_rh)
+
+        # Extraire l'id_contrat depuis les donnees RH
+        id_contrat = champs_rh.get("id_contrat", "inconnu")
+
         resultat = pipeline_complet_avec_donnees(chemin_tmp, id_contrat, champs_rh)
         return JSONResponse(content={
             "success": True,
