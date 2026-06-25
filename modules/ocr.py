@@ -11,6 +11,7 @@ from pdf2image import convert_from_path
 
 # Chemin Poppler pour Windows
 POPPLER_PATH = r"C:\poppler\poppler-26.02.0\Library\bin"
+DOSSIER_IMAGES = "images_pretraitees"
 
 # Chargement du modèle OCR une seule fois au démarrage
 print("Chargement du modèle OCR (DocTR)...")
@@ -27,17 +28,22 @@ def charger_document(chemin_fichier):
     extension = os.path.splitext(chemin_fichier)[1].lower()
     images = []
 
+    # Créer le dossier s'il n'existe pas
+    os.makedirs(DOSSIER_IMAGES, exist_ok=True)
+
     if extension == ".pdf":
         pages = convert_from_path(chemin_fichier, poppler_path=POPPLER_PATH)
         for i, page in enumerate(pages):
-            chemin_image = f"page_{i+1}.jpg"
+            # Nom basé sur le PDF — stocké dans images_pretraitees/
+            nom_pdf = os.path.splitext(os.path.basename(chemin_fichier))[0]
+            chemin_image = os.path.join(DOSSIER_IMAGES, f"{nom_pdf}_page_{i+1}.jpg")
             page.save(chemin_image)
             images.append(chemin_image)
             print(f"{len(images)} pages converties")
     elif extension in [".jpg", ".jpeg", ".png"]:
         images.append(chemin_fichier)
     else:
-        print(f"Format non supporté : {extension}")
+        print(f"Format non supporte : {extension}")
         return None
 
     return images
@@ -46,15 +52,15 @@ def charger_document(chemin_fichier):
 def pretraiter_image(chemin_image):
     """
     Prétraitement OpenCV : conversion en niveaux de gris + débruitage.
-    Retourne le chemin de l'image prétraitée.
+    Retourne le chemin de l'image prétraitée dans images_pretraitees/.
     """
     image = cv2.imread(chemin_image)
     gris = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     debruite = cv2.fastNlMeansDenoising(gris, h=10)
+    # L'image prétraitée dans le même dossier images_pretraitees/
     chemin_pretraite = chemin_image.replace(".jpg", "_pretraite.jpg")
     cv2.imwrite(chemin_pretraite, debruite)
     return chemin_pretraite
-
 
 def extraire_texte_ocr(chemin_image):
     """

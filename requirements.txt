@@ -1,0 +1,19 @@
+# OCR
+doctr[torch]
+
+# Preprocessing images
+opencv-python
+
+# PDF to images
+pdf2image
+
+# Comparaison floue
+rapidfuzz
+
+# Appels HTTP (Ollama + API RH)
+requests
+
+# API REST
+fastapi
+uvicorn
+python-multipart
