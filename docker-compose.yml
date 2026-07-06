@@ -1,0 +1,44 @@
+services:
+
+  api:
+    build: ./services/api
+    container_name: verification_contrats_api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ocr
+      - signature
+      - ollama
+    environment:
+      - OCR_SERVICE_URL=http://ocr:8001
+      - SIGNATURE_SERVICE_URL=http://signature:8002
+      - OLLAMA_URL=http://ollama:11434/api/generate
+    restart: unless-stopped
+
+  ocr:
+    build: ./services/ocr
+    container_name: verification_contrats_ocr
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+  signature:
+    build: ./services/signature
+    container_name: verification_contrats_signature
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    container_name: verification_contrats_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

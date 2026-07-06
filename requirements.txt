@@ -1,5 +1,3 @@
-# OCR
-doctr[torch]
 
 # Preprocessing images
 opencv-python

@@ -14,6 +14,7 @@ def mettre_a_jour_statut(id_contrat, statut, motif=None):
     Met à jour le statut d'un contrat dans le système RH.
     Statuts possibles : 'valide', 'Rejeté', 'En révision', 'Erreur'
     """
+    
     payload = {
         "id_contrat": id_contrat,
         "statut": statut,
@@ -25,4 +26,4 @@ def mettre_a_jour_statut(id_contrat, statut, motif=None):
             json=payload
         )
     except Exception as e:
-        print(f"Erreur mise à jour statut : {e}")
+        pass  

@@ -5,10 +5,11 @@ Utilise un LLM local pour extraire les données structurées depuis le texte OCR
 
 import requests
 import json
+import os
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 MODELE_LLM = "qwen2.5:7b"
-
+print(f"Modele LLM charge : {MODELE_LLM}")
 
 def extraire_champs_llm(texte_ocr):
     """
@@ -28,7 +29,10 @@ Lis attentivement le contrat et extrais TOUS les champs suivants. Cherche bien d
   Cherche après : "en qualité de", "agissant en qualité de",
   "En qualité de :", "qualité :", "en sa qualité de"
 - full_name : nom et prénom du salarié ou stagiaire, SANS la civilité "Monsieur"/"Madame"/"M."
-- cin : numéro de carte d'identité nationale (après "Carte Nationale d'Identité" ou "CIN")
+- cin : numéro de carte d'identité nationale.
+  TOUJOURS présent après "Carte Nationale d'Identité n°" ou "CIN n°" ou "CIN no".
+  Format : lettre(s) suivie(s) de chiffres. Exemple : T412095, EA582147, BJ847293.
+  Ne JAMAIS retourner null si ce format est trouvé dans le texte.
 - cin_address : adresse du domicile du salarié.
   Cherche après : "demeurant au", "demeurant à",
   "Adresse CIN de salarié :", "Adress CIN de salarié :", "domicilié au"
@@ -57,6 +61,9 @@ Réponds uniquement avec le JSON."""
             "options": {"temperature": 0, "seed": 42}
         }
     )
+    
+    # Debug temporaire
+    print(f"Status : {response.status_code}")
 
     resultat = response.json()["response"]
     champs = json.loads(resultat)
