@@ -3,8 +3,68 @@ Module Comparaison — Comparaison des champs OCR avec les données RH
 Utilise RapidFuzz pour la comparaison floue des champs textuels
 """
 
+import re
 import unicodedata
+from datetime import datetime
 from rapidfuzz import fuzz
+
+
+# ============================================================
+# Normalisation des dates — évite les faux rejets de format
+# (ex: "01/07/2026" vs "2026-07-01" vs "1er juillet 2026")
+# ============================================================
+
+MOIS_FR = {
+    "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4,
+    "mai": 5, "juin": 6, "juillet": 7, "août": 8, "aout": 8,
+    "septembre": 9, "octobre": 10, "novembre": 11, "décembre": 12, "decembre": 12
+}
+
+CHAMPS_DATE = ["start_date", "end_date", "birth_date"]
+
+
+def normaliser_date(date_str):
+    """
+    Convertit différents formats de date (ISO, JJ/MM/AAAA, ou français en toutes lettres)
+    en objet date comparable. Retourne None si le format n'est pas reconnu.
+    """
+    if not date_str:
+        return None
+
+    date_str = str(date_str).strip().lower()
+
+    # Formats numériques courants
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+
+    # Format français en toutes lettres : "1er juillet 2026", "26 juin 2026"
+    match = re.match(r"(\d{1,2})(?:er)?\s+(\w+)\s+(\d{4})", date_str)
+    if match:
+        jour, mois_nom, annee = match.groups()
+        mois_num = MOIS_FR.get(mois_nom)
+        if mois_num:
+            try:
+                return datetime(int(annee), mois_num, int(jour)).date()
+            except ValueError:
+                pass
+
+    return None
+
+
+def dates_identiques(date_rh, date_ocr):
+    """
+    Compare deux dates en les normalisant d'abord. Si l'une des deux ne peut pas
+    être parsée (format inconnu), retourne False — préfère un rejet explicite
+    plutôt qu'une comparaison de string trompeuse.
+    """
+    d1 = normaliser_date(date_rh)
+    d2 = normaliser_date(date_ocr)
+    if d1 is None or d2 is None:
+        return False
+    return d1 == d2
 
 
 def normaliser_texte(texte):
@@ -22,15 +82,16 @@ def comparer_champs(champs_ocr, champs_rh):
     """
     Compare les champs extraits par OCR/LLM avec les données du système RH.
 
-    Trois types de comparaison selon le champ :
-    - Exacts      : dates, CIN, CNSS, type de contrat → comparaison stricte
+    Types de comparaison selon le champ :
+    - Dates       : start_date, end_date, birth_date → normalisation puis comparaison stricte
+    - Exacts      : CIN, CNSS, type de contrat → comparaison stricte de texte
     - Tolérants   : adresse, représentant, capital → RapidFuzz ou tolérance %
     - Textuels    : nom salarié, nom société → token_sort_ratio ≥ 95%
 
     Retourne un dictionnaire de résultats par champ.
     """
     resultats = {}
-    champs_exacts = ["start_date", "end_date", "birth_date", "cin", "cnss", "contract_type"]
+    champs_exacts_texte = ["cin", "cnss", "contract_type"]
     champs_tolerants = ["cin_address", "representer", "representer_job", "company_capital"]
 
     for champ, valeur_ocr in champs_ocr.items():
@@ -46,14 +107,17 @@ def comparer_champs(champs_ocr, champs_rh):
                 conforme = str(valeur_ocr) == str(valeur_rh)
             score = 100 if conforme else 0
 
-        # Champs exacts — comparaison stricte (dates, CIN, CNSS, type contrat)
-        elif champ in champs_exacts:
+        # Dates — normalisation avant comparaison (corrige le bug de format)
+        elif champ in CHAMPS_DATE:
+            conforme = dates_identiques(valeur_rh, valeur_ocr)
+            score = 100 if conforme else 0
+
+        # Champs exacts texte — CIN, CNSS, type de contrat
+        elif champ in champs_exacts_texte:
             if champ == "contract_type":
                 conforme = str(valeur_ocr).strip().upper() == str(valeur_rh).strip().upper()
             else:
-                # Toutes les dates comparées de façon stricte
-                # Si l'OCR lit mal une date → le contrat doit être ressoumis
-                conforme = str(valeur_ocr) == str(valeur_rh)
+                conforme = str(valeur_ocr).strip() == str(valeur_rh).strip()
             score = 100 if conforme else 0
 
         # Champs tolérants — similarité partielle ou comparaison numérique

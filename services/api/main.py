@@ -7,6 +7,7 @@ import os
 import json
 import tempfile
 import requests
+import time
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 import traceback
@@ -20,7 +21,7 @@ from api_rh import mettre_a_jour_statut
 from llm import extraire_champs_llm
 
 OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "http://localhost:8001")
-SIGNATURE_SERVICE_URL = os.getenv("SIGNATURE_SERVICE_URL", "http://localhost:8002")  # ← NOUVEAU
+SIGNATURE_SERVICE_URL = os.getenv("SIGNATURE_SERVICE_URL", "http://localhost:8002")
 
 app = FastAPI(title="API Verification Contrats RH", version="1.0")
 
@@ -41,7 +42,6 @@ async def verifier_contrat(
     fichier: UploadFile = File(...),
     donnees_rh: str = Form(...)
 ):
-    # Sauvegarder le PDF temporairement
     suffix = os.path.splitext(fichier.filename)[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         contenu = await fichier.read()
@@ -53,35 +53,9 @@ async def verifier_contrat(
         id_contrat = champs_rh.get("id_contrat", "inconnu")
         contract_type = champs_rh.get("contract_type", "inconnu")
 
-        # Étape 1 — Appel service OCR
-        with open(chemin_tmp, "rb") as f:
-            ocr_response = requests.post(
-                f"{OCR_SERVICE_URL}/extract",
-                files={"fichier": (fichier.filename, f, "application/pdf")}
-            )
+        t0 = time.time()
 
-        ocr_result = ocr_response.json()
-
-        if not ocr_result["success"]:
-            return JSONResponse(status_code=500, content={
-                "success": False,
-                "error": ocr_result.get("error", "Erreur OCR")
-            })
-
-        texte_ocr = ocr_result["texte"]
-        confiance = ocr_result["confiance"]
-
-        # Étape 2 — Vérification qualité OCR
-        if confiance < 0.45 or len(texte_ocr.strip()) < 50:
-            return JSONResponse(content={
-                "success": True,
-                "id_contrat": id_contrat,
-                "statut": "Rejete",
-                "score_global": 0,
-                "motif": "Scan inexploitable — resoumettre un meilleur scan"
-            })
-        
-        # Étape 3 — Vérification signature (avant LLM !) ← NOUVEAU
+        # Étape 1 — Vérification signature EN PREMIER (rapide, ~6s max)
         with open(chemin_tmp, "rb") as f:
             sig_response = requests.post(
                 f"{SIGNATURE_SERVICE_URL}/detect",
@@ -89,7 +63,10 @@ async def verifier_contrat(
             )
         sig_result = sig_response.json()
         signature_detectee = sig_result.get("signature_detectee", False)
+        t1 = time.time()
+        print(f"[TIMING] Signature : {t1 - t0:.2f}s")
 
+        # REJET IMMÉDIAT — on ne lance ni OCR ni LLM si pas de signature
         if not signature_detectee:
             decision = {
                 "statut": "Rejete",
@@ -100,10 +77,47 @@ async def verifier_contrat(
             return JSONResponse(content={
                 "success": True,
                 "id_contrat": id_contrat,
-                **decision
+                **decision,
+                "temps_traitement": round(time.time() - t0, 2)
             })
-        # Étape 4 — Extraction champs via LLM
+
+        # Étape 2 — Appel service OCR (seulement si signature détectée)
+        with open(chemin_tmp, "rb") as f:
+            ocr_response = requests.post(
+                f"{OCR_SERVICE_URL}/extract",
+                files={"fichier": (fichier.filename, f, "application/pdf")}
+            )
+
+        ocr_result = ocr_response.json()
+        t2 = time.time()
+        print(f"[TIMING] OCR : {t2 - t1:.2f}s")
+
+        if not ocr_result["success"]:
+            return JSONResponse(status_code=500, content={
+                "success": False,
+                "error": ocr_result.get("error", "Erreur OCR")
+            })
+
+        texte_ocr = ocr_result["texte"]
+        confiance = ocr_result["confiance"]
+
+        # Étape 3 — Vérification qualité OCR
+        if confiance < 0.45 or len(texte_ocr.strip()) < 50:
+            return JSONResponse(content={
+                "success": True,
+                "id_contrat": id_contrat,
+                "statut": "Rejete",
+                "score_global": 0,
+                "motif": "Scan inexploitable — resoumettre un meilleur scan",
+                "temps_traitement": round(time.time() - t0, 2)
+            })
+
+        # Étape 4 — Extraction champs via LLM (Ollama)
         champs_ocr = extraire_champs_llm(texte_ocr)
+        print("[DEBUG] Champs extraits par le LLM :", champs_ocr)        
+        t3 = time.time()
+        print(f"[TIMING] LLM (Ollama) : {t3 - t2:.2f}s")
+        print(f"[TIMING] TOTAL : {t3 - t0:.2f}s")
 
         # Étape 5 — Vérification champs illisibles
         champs_illisibles = [
@@ -121,7 +135,8 @@ async def verifier_contrat(
             return JSONResponse(content={
                 "success": True,
                 "id_contrat": id_contrat,
-                **decision
+                **decision,
+                "temps_traitement": round(time.time() - t0, 2)
             })
 
         # Étape 6 — Comparaison et scoring
@@ -134,14 +149,15 @@ async def verifier_contrat(
             "id_contrat": id_contrat,
             "statut": decision["statut"],
             "score_global": decision["score_global"],
-            "motif": decision["motif"]
+            "motif": decision["motif"],
+            "temps_traitement": round(time.time() - t0, 2)
         })
 
     except Exception as e:
-        print(traceback.format_exc())  
+        print(traceback.format_exc())
         return JSONResponse(
-        status_code=500,
-        content={"success": False, "error": str(e)}
-    )
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
     finally:
         os.unlink(chemin_tmp)

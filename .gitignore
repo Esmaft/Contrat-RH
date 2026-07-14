@@ -1,11 +1,12 @@
 # Images temporaires générées par l'OCR
 images_pretraitees/
 *.jpg
+*.jpeg
 *.png
 
-# Modèles IA (trop lourds pour Git)
-models/
-*.pt
+# Modèles IA (trop lourds pour Git) — sauf le modèle final de signature
+models/*
+!models/yolov8s_signature_final.pt
 
 # Python
 __pycache__/
@@ -13,9 +14,14 @@ __pycache__/
 *.pyo
 .env
 
-# Dataset YOLOv8
-datasets/
+# Dataset (corrigé : dataset_final, pas datasets)
+dataset_final/*
+!dataset_final/data.yaml
 runs/
 
 # Pages converties temporaires
 page_*.jpg
+
+# Fichiers système
+.DS_Store
+Thumbs.db
