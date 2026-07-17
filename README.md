@@ -1,6 +1,6 @@
 # Système de Vérification Automatique de Contrats RH
 
-Projet de Fin d'Année (PFA) — Vérification automatisée de contrats RH par analyse de signature, OCR et extraction de champs via LLM.
+Projet de Fin d'Année (PFA) — Conception et Développement d'une Architecture Microservices pour la Détection de Signature et la Vérification Automatisée de Contrats de Travail
 
 **Auteur** : Asma EL FATIMI
 ---
