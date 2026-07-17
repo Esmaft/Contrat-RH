@@ -156,4 +156,3 @@ POST http://localhost:8000/api/version1/verify
 - Référentiel de templates par entreprise pour affiner les règles de validation
 - Gestion de la concurrence à l'échelle infrastructure (file d'attente distribuée, plusieurs instances GPU)
 - Portabilité Linux complète (chemins actuellement codés pour Windows)
-- Identifiants uniques (UUID) pour les fichiers temporaires du service Signature (déjà en place côté OCR)
