@@ -19,7 +19,7 @@ Automatiser la vérification de contrats RH (PDF) en combinant :
 Le système est organisé en microservices FastAPI indépendants :
 
 ```
-Plateforme RH IMRASOFT
+Plateforme RH 
         |
         | POST /api/version1/verify (fichier PDF + donnees_rh)
         v
