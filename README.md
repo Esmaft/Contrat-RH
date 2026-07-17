@@ -71,7 +71,7 @@ Pour chaque signature détectée par YOLO (position x, y), le système cherche l
 
 - **Architecture** : YOLOv8s (Ultralytics)
 - **Dataset** : fusion de sources annotées (Roboflow + Tobacco800), nettoyage des formats mixtes segmentation/detection, re-split train/val équilibré
-- **Résultats finaux** (epoch 91) :
+- **Résultats finaux** (epoch 100) :
 
 | Métrique | Score |
 |---|---|
