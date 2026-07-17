@@ -9,11 +9,6 @@ from datetime import datetime
 from rapidfuzz import fuzz
 
 
-# ============================================================
-# Normalisation des dates — évite les faux rejets de format
-# (ex: "01/07/2026" vs "2026-07-01" vs "1er juillet 2026")
-# ============================================================
-
 MOIS_FR = {
     "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4,
     "mai": 5, "juin": 6, "juillet": 7, "août": 8, "aout": 8,

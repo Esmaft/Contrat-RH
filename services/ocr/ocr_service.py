@@ -1,12 +1,39 @@
 """
-Service OCR — API FastAPI indépendante
-Reçoit un PDF et retourne le texte extrait
+Service OCR -- Extraction de texte via DocTR
+==============================================
+API FastAPI independante, port 8001.
+
+Recoit un PDF, convertit toutes ses pages en images, et retourne :
+- le texte complet reconnu (filtre par confiance moyenne par ligne)
+- la position normalisee (0 a 1) de chaque mot, utilisee par le module
+  d'identification des signataires pour localiser les noms sur la page.
+
+Optimisations appliquees (voir historique du projet) :
+- Inference sur GPU si disponible (division du temps de traitement par
+  environ 9 par rapport au CPU sur les documents de test).
+- Traitement en un seul batch (toutes les pages en une inference).
+- Aucun pretraitement d'image manuel (DocTR gere deja son propre
+  pretraitement en interne).
+
+Robustesse concurrence :
+- Chaque requete traite ses images dans un sous-dossier unique (UUID),
+  evitant toute collision de nom de fichier si plusieurs requetes
+  arrivent simultanement (auparavant : noms fixes "page_1.jpg" partages
+  dans un seul dossier, risque d'ecrasement entre requetes concurrentes).
+- Un `asyncio.Semaphore` serialise les appels d'inference GPU (un seul a
+  la fois pour ce service), evitant toute contention/instabilite memoire
+  si plusieurs requetes arrivent simultanement sur le meme GPU partage
+  avec les autres services (Signature, Ollama).
 """
 
+import asyncio
+import logging
 import os
 import platform
+import shutil
 import tempfile
-import time
+import uuid
+
 import torch
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
@@ -14,41 +41,39 @@ from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
 from pdf2image import convert_from_path
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("ocr_service")
+
 POPPLER_PATH = r"C:\poppler\poppler-26.02.0\Library\bin" if platform.system() == "Windows" else None
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DOSSIER_IMAGES = os.path.join(BASE_DIR, "images_pretraitees")
-os.makedirs(DOSSIER_IMAGES, exist_ok=True)
+DOSSIER_IMAGES_RACINE = os.path.join(BASE_DIR, "images_pretraitees")
+os.makedirs(DOSSIER_IMAGES_RACINE, exist_ok=True)
 
-print("Chargement du modèle OCR (DocTR)...")
-ocr_model = ocr_predictor(
-    pretrained=True,
-    assume_straight_pages=True,
-    detect_orientation=False,
-)
+DPI_CONVERSION = 200
+CONFIANCE_LIGNE_MIN = 0.5
+
+# Nombre d'inferences GPU autorisees en parallele pour ce service.
+MAX_INFERENCES_PARALLELES = int(os.getenv("OCR_MAX_PARALLEL", "1"))
+semaphore_gpu = asyncio.Semaphore(MAX_INFERENCES_PARALLELES)
+
+logger.info("Chargement du modele OCR (DocTR)...")
+ocr_model = ocr_predictor(pretrained=True, assume_straight_pages=True, detect_orientation=False)
 
 if torch.cuda.is_available():
-    try:
-        ocr_model = ocr_model.cuda()
-        print(f"DocTR sur GPU : {torch.cuda.get_device_name(0)}")
-        vram_utilisee = torch.cuda.memory_allocated(0) / 1024**3
-        print(f"VRAM utilisée par DocTR : {vram_utilisee:.2f} GB")
-    except RuntimeError as e:
-        print(f"⚠️ Échec GPU, fallback CPU : {e}")
+    ocr_model = ocr_model.cuda()
+    logger.info("DocTR sur GPU : %s", torch.cuda.get_device_name(0))
 else:
-    print("⚠️ GPU non disponible, DocTR reste sur CPU")
+    logger.warning("GPU non disponible, DocTR tourne sur CPU (plus lent)")
 
 ocr_model = ocr_model.eval()
+logger.info("Modele OCR pret.")
 
-print("Modèle OCR prêt (GPU).")
-app = FastAPI(title="Service OCR", version="1.0")
-
-NB_PAGES_MAX = 1
-DPI_CONVERSION = 150  # suffisant pour du texte imprimé net, réduit le coût de conversion + inférence
+app = FastAPI(title="Service OCR", version="1.3")
 
 
 @app.get("/")
 def health_check():
-    return {"status": "Service OCR en ligne", "version": "1.0"}
+    return {"status": "Service OCR en ligne", "version": "1.3"}
 
 
 @app.post("/extract")
@@ -59,60 +84,63 @@ async def extraire_texte(fichier: UploadFile = File(...)):
         tmp.write(contenu)
         chemin_tmp = tmp.name
 
+    # Sous-dossier unique pour cette requete -- evite toute collision si
+    # une autre requete est traitee en parallele au meme moment.
+    id_requete = uuid.uuid4().hex
+    dossier_requete = os.path.join(DOSSIER_IMAGES_RACINE, id_requete)
+    os.makedirs(dossier_requete, exist_ok=True)
+
     chemins_images = []
 
     try:
-        t0 = time.time()
         pages = convert_from_path(chemin_tmp, poppler_path=POPPLER_PATH, dpi=DPI_CONVERSION)
-        pages_a_traiter = pages  # au lieu de pages[:NB_PAGES_MAX]
 
-        for i, page in enumerate(pages_a_traiter):
-            nom = os.path.join(DOSSIER_IMAGES, f"page_{i+1}.jpg")
-            page.save(nom)
-            chemins_images.append(nom)
+        for i, page in enumerate(pages):
+            chemin = os.path.join(dossier_requete, f"page_{i + 1}.jpg")
+            page.save(chemin)
+            chemins_images.append(chemin)
 
-        t1 = time.time()
-        print(f"[OCR-TIMING] Conversion PDF->image : {t1 - t0:.2f}s")
-
-        # Traitement en UN SEUL batch, aucun prétraitement manuel
         doc = DocumentFile.from_images(chemins_images)
-        t2 = time.time()
-        print(f"[OCR-TIMING] Chargement images DocTR : {t2 - t1:.2f}s")
 
-        with torch.no_grad():  # désactive le calcul de gradient, gain de vitesse et mémoire
-            result = ocr_model(doc)
-
-        t3 = time.time()
-        print(f"[OCR-TIMING] Inférence OCR : {t3 - t2:.2f}s")
+        # Un seul appel d'inference GPU a la fois pour ce service.
+        async with semaphore_gpu:
+            with torch.no_grad():
+                result = ocr_model(doc)
 
         texte_complet = ""
         confiances = []
+        mots_avec_positions = []
 
-        for page_r in result.pages:
+        for num_page, page_r in enumerate(result.pages):
             for block in page_r.blocks:
                 for line in block.lines:
-                    ligne = " ".join([w.value for w in line.words])
-                    confs = [w.confidence for w in line.words]
-                    if confs and sum(confs) / len(confs) > 0.5:
-                        texte_complet += ligne + "\n"
-                        confiances.extend(confs)
+                    confs_ligne = [w.confidence for w in line.words]
+                    if confs_ligne and sum(confs_ligne) / len(confs_ligne) > CONFIANCE_LIGNE_MIN:
+                        texte_complet += " ".join(w.value for w in line.words) + "\n"
+                        confiances.extend(confs_ligne)
+
+                    for word in line.words:
+                        (x_min, y_min), (x_max, y_max) = word.geometry
+                        mots_avec_positions.append({
+                            "mot": word.value,
+                            "x_center": round((x_min + x_max) / 2, 4),
+                            "y_center": round((y_min + y_max) / 2, 4),
+                            "page": num_page,
+                        })
 
         confiance_globale = sum(confiances) / len(confiances) if confiances else 0
+
         return JSONResponse(content={
             "success": True,
             "texte": texte_complet,
-            "confiance": round(confiance_globale, 2)
+            "confiance": round(confiance_globale, 2),
+            "mots_positions": mots_avec_positions,
         })
 
     except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+        logger.exception("Erreur lors de l'extraction OCR")
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
     finally:
         os.unlink(chemin_tmp)
-        for chemin in chemins_images:
-            if os.path.exists(chemin):
-                os.unlink(chemin)
+        shutil.rmtree(dossier_requete, ignore_errors=True)
