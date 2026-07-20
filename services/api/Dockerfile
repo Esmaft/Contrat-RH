@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir \
     requests \
     rapidfuzz
 
-COPY main.py .
+COPY services/api/main.py .
 COPY modules/ ./modules/
 
 EXPOSE 8000

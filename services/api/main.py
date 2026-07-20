@@ -34,8 +34,8 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "modules"))
-
+MODULES_PATH = os.getenv("MODULES_PATH", os.path.join(os.path.dirname(__file__), "..", "..", "modules"))
+sys.path.append(MODULES_PATH)
 from comparaison import comparer_champs
 from scoring import calculer_score
 from llm import extraire_champs_llm

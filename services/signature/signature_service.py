@@ -38,8 +38,7 @@ logger = logging.getLogger("signature_service")
 
 POPPLER_PATH = r"C:\poppler\poppler-26.02.0\Library\bin" if platform.system() == "Windows" else None
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "yolov8s_signature_final.pt")
-
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(BASE_DIR, "models", "yolov8s_signature_final.pt"))
 CONFIDENCE_THRESHOLD = 0.20
 IOU_THRESHOLD = 0.3
 DPI_CONVERSION = 200
@@ -80,7 +79,7 @@ async def detecter_signature(fichier: UploadFile = File(...)):
             })
 
         derniere_page = pages[-1]
-        index_page_zero = len(pages) - 1  # convention 0-indexee, alignee avec le service OCR
+        index_page_zero = len(pages) - 1  
 
         chemin_page = chemin_tmp + "_signature.jpg"
         derniere_page.save(chemin_page)
