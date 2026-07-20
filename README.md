@@ -35,8 +35,6 @@ Plateforme RH
 +--------+      +--------+      +----------+
 ```
 
-Le module `modules/identification_signataires.py` n'est pas un service séparé : il est appelé directement par l'API principale, en croisant les résultats des services Signature et OCR.
-
 ### Pipeline de traitement (ordre optimisé pour la performance)
 
 1. **Détection de signature** (rapide, ~5-10s) -- rejet immédiat si le contrat n'est pas signé, évite de lancer inutilement l'OCR/LLM
