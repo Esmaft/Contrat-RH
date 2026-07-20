@@ -1,43 +1,82 @@
+version: "3.8"
+
 services:
 
-  api:
-    build: ./services/api
-    container_name: verification_contrats_api
-    ports:
-      - "8000:8000"
-    depends_on:
-      - ocr
-      - signature
-      - ollama
-    environment:
-      - OCR_SERVICE_URL=http://ocr:8001
-      - SIGNATURE_SERVICE_URL=http://signature:8002
-      - OLLAMA_URL=http://ollama:11434/api/generate
-    restart: unless-stopped
-
-  ocr:
-    build: ./services/ocr
-    container_name: verification_contrats_ocr
-    ports:
-      - "8001:8001"
-    restart: unless-stopped
-
+  # ============================================================
+  # Service Signature -- Detection YOLOv8 (GPU)
+  # ============================================================
   signature:
     build: ./services/signature
-    container_name: verification_contrats_signature
+    container_name: signature_service
     ports:
       - "8002:8002"
     volumes:
-      - ./models:/app/models
+      - ./models:/app/models:ro
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
+  # ============================================================
+  # Service OCR -- DocTR (GPU)
+  # ============================================================
+  ocr:
+    build: ./services/ocr
+    container_name: ocr_service
+    ports:
+      - "8001:8001"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ============================================================
+  # Ollama -- LLM (Qwen2.5:7b), GPU
+  # ============================================================
   ollama:
-    image: ollama/ollama
-    container_name: verification_contrats_ollama
+    image: ollama/ollama:latest
+    container_name: ollama_service
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ============================================================
+  # API principale -- Orchestration (pas de GPU)
+  # ============================================================
+  api:
+    build: ./services/api
+    container_name: api_principale
+    ports:
+      - "8000:8000"
+    environment:
+      - SIGNATURE_SERVICE_URL=http://signature:8002
+      - OCR_SERVICE_URL=http://ocr:8001
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      - signature
+      - ocr
+      - ollama
     restart: unless-stopped
 
 volumes:

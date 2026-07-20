@@ -3,6 +3,7 @@
 Projet de Fin d'Année (PFA) — Vérification automatisée de contrats RH par analyse de signature, OCR et extraction de champs via LLM.
 
 **Auteur** : Asma EL FATIMI
+
 ---
 
 ## 1. Objectif du projet
@@ -82,27 +83,31 @@ Pour chaque signature détectée par YOLO (position x, y), le système cherche l
 
 Modèle final : `models/yolov8s_signature_final.pt`
 
-## 5. Installation
+## 5. Installation et lancement
 
-### Prérequis
+Deux modes de déploiement sont disponibles : exécution locale directe, ou conteneurisation Docker (recommandée pour la portabilité).
+
+### 5.1 Déploiement Docker (recommandé)
+
+**Prérequis** : Docker, Docker Compose, pilote NVIDIA + NVIDIA Container Toolkit pour l'accélération GPU.
+
+```bash
+cd docker
+docker compose up --build -d
+docker exec -it ollama_service ollama pull qwen2.5:7b
+```
+
+Les dépendances Python de chaque service sont installées directement dans leur `Dockerfile` respectif (pas de fichier `requirements.txt` séparé à maintenir). Voir `docker/README-DOCKER.md` pour le détail complet (structure attendue, commandes utiles, fonctionnement sans GPU).
+
+La conteneurisation résout également la limite de portabilité Windows : `poppler-utils` est installé nativement dans les images Linux, éliminant la dépendance au chemin `POPPLER_PATH` codé en dur.
+
+### 5.2 Exécution locale (développement)
+
+**Prérequis**
 - Python 3.10
 - CUDA 12.x + GPU compatible (recommandé -- le pipeline est optimisé pour tourner sur GPU)
 - [Poppler](https://github.com/oschwartz10612/poppler-windows) (conversion PDF -> image)
 - [Ollama](https://ollama.com) avec le modèle `qwen2.5:7b`
-
-### Dépendances Python
-
-```bash
-pip install -r requirements.txt
-```
-
-### Modèle Ollama
-
-```bash
-ollama pull qwen2.5:7b
-```
-
-## 6. Lancement des services
 
 Chaque service doit être lancé indépendamment (3 terminaux séparés) :
 
@@ -122,7 +127,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 Assure-toi qu'Ollama tourne aussi (`ollama serve`).
 
-## 7. Utilisation de l'API
+## 6. Utilisation de l'API
 
 ### Endpoint principal
 
@@ -136,13 +141,14 @@ POST http://localhost:8000/api/version1/verify
 
 **Réponse** : statut (`valide` / `Rejete` / `En revision`), score global, motif explicite en cas de rejet, détail par signature détectée (rôle identifié, score de correspondance par rôle), temps de traitement.
 
-## 8. Robustesse et production
+## 7. Robustesse et production
 
 - **Fichiers temporaires** : chaque requête OCR utilise un sous-dossier unique (UUID), évitant toute collision entre requêtes concurrentes
 - **Concurrence GPU** : un `asyncio.Semaphore` sérialise les appels d'inférence GPU dans les services Signature et OCR, évitant toute contention mémoire (VRAM) en cas de requêtes simultanées
 - **Test de charge validé** : 3 requêtes simultanées traitées avec succès (100% de réussite), avec un temps de traitement croissant selon l'ordre de mise en file d'attente
+- **Portabilité** : conteneurisation Docker disponible (voir section 5.1), éliminant la dépendance aux chemins Windows codés en dur
 
-## 9. Choix techniques et limites connues
+## 8. Choix techniques et limites connues
 
 - **GPU obligatoire pour de bonnes performances** : les 3 modèles (YOLO, DocTR, Ollama) tournent sur le même GPU (8GB VRAM suffisant pour leur coexistence). Sur CPU seul, le temps de traitement OCR augmente fortement (~60-70s au lieu de ~7s).
 - **Cold start** : la première requête après une période d'inactivité est plus lente (Ollama recharge le modèle en VRAM après expiration du `keep_alive`).
@@ -150,10 +156,9 @@ POST http://localhost:8000/api/version1/verify
 - **Chevauchement encre/texte** : si une signature manuscrite recouvre le nom imprimé, l'OCR peut échouer à le lire ; un filet de secours basé sur un score de similarité élevé atténue ce risque sans le garantir totalement.
 - **mAP50-95 modéré (0.549)** : lié à la conversion approximative polygone->bounding box sur une partie du dataset (sources Roboflow/Tobacco800 annotées à l'origine en segmentation).
 
-## 10. Pistes d'amélioration futures
+## 9. Pistes d'amélioration futures
 
 - Détection des zones de signature vides (2e classe YOLO) pour connaître le nombre exact de signatures attendues indépendamment des données RH
 - Référentiel de templates par entreprise pour affiner les règles de validation
-- Gestion de la concurrence à l'échelle infrastructure (file d'attente distribuée, plusieurs instances GPU)
-- Portabilité Linux complète (chemins actuellement codés pour Windows)
-- Identifiants uniques (UUID) pour les fichiers temporaires du service Signature (déjà en place côté OCR)
+- Portabilité Linux complète (chemins actuellement codés pour Windows) -- *partiellement couverte par la conteneurisation Docker, section 5.1*
+- Gestion de la concurrence à l'échelle infrastructure (file d'attente distribuée, plusieurs instances/GPU) -- la contention GPU au sein d'un même serveur est déjà gérée au niveau du code (sémaphores, section 7) ; ce point ne concerne que le dimensionnement à plus grande échelle (plusieurs serveurs, load balancing)

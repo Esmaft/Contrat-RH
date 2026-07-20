@@ -4,13 +4,13 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     fastapi \
-    uvicorn \
+    "uvicorn[standard]" \
     python-multipart \
     requests \
     rapidfuzz
 
 COPY main.py .
-COPY modules/ modules/
+COPY modules/ ./modules/
 
 EXPOSE 8000
 
