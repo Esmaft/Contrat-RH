@@ -1,83 +1,141 @@
-# Déploiement Docker — Système de Vérification de Contrats RH
+# Deploiement Docker -- Systeme de Verification de Contrats RH
 
-## Structure attendue
+## Structure reelle du projet
+
+Les fichiers Docker sont a la racine du projet (pas dans un sous-dossier `docker/`) :
 
 ```
-docker/
+projet rh/
 ├── docker-compose.yml
 ├── models/
-│   └── yolov8s_signature_final.pt      <- a copier ici (non inclus dans l'image, volume monte)
+│   └── yolov8s_signature_final.pt
+├── modules/
+│   ├── comparaison.py
+│   ├── scoring.py
+│   ├── llm.py
+│   └── identification_signataires.py
 └── services/
     ├── signature/
     │   ├── Dockerfile
-    │   ├── requirements.txt
-    │   └── signature_service.py         <- a copier depuis le projet
+    │   └── signature_service.py
     ├── ocr/
     │   ├── Dockerfile
-    │   ├── requirements.txt
-    │   └── ocr_service.py               <- a copier depuis le projet
+    │   └── ocr_service.py
     └── api/
         ├── Dockerfile
-        ├── requirements.txt
-        ├── main.py                      <- a copier depuis le projet
-        └── modules/                     <- a copier depuis le projet
-            ├── comparaison.py
-            ├── scoring.py
-            ├── llm.py
-            └── identification_signataires.py
+        └── main.py
 ```
 
-## Prérequis sur la machine hôte
+Aucun fichier `requirements.txt` : les dependances Python sont installees directement dans chaque `Dockerfile` (`RUN pip install ...`), pas de fichier separe a maintenir.
 
-1. **Docker** et **Docker Compose** installés
-2. **Pilote NVIDIA** installé sur l'hôte (Windows : via WSL2, cf. documentation NVIDIA CUDA on WSL)
-3. **NVIDIA Container Toolkit** installé, pour que Docker puisse accéder au GPU :
+## Prerequis sur la machine hote
+
+1. **Docker** et **Docker Compose** installes
+2. **Pilote NVIDIA** installe sur l'hote si GPU disponible (Windows : via WSL2, cf. documentation NVIDIA CUDA on WSL)
+3. **NVIDIA Container Toolkit** installe (uniquement si GPU disponible) :
    ```bash
-   # Sur une machine Linux (ou WSL2)
    distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
    curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
    curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
    sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
    sudo systemctl restart docker
    ```
+   Sans GPU disponible : voir section "Fonctionnement sans GPU" plus bas -- le systeme reste fonctionnel, juste plus lent.
 
-## Étapes de déploiement
+## Variables d'environnement critiques (deja configurees dans docker-compose.yml)
 
-### 1. Préparer les fichiers
+Ces variables resolvent des incompatibilites de chemins entre l'execution locale (Windows) et l'execution en conteneur (Linux). Elles sont deja presentes dans `docker-compose.yml` fourni -- **rien a modifier pour un lancement standard**, mais a connaitre en cas de probleme :
 
-Copier les fichiers source réels du projet dans la structure `docker/` ci-dessus (remplacer les placeholders).
+| Variable | Service | Valeur attendue | Role |
+|---|---|---|---|
+| `MODEL_PATH` | signature | `/app/models/yolov8s_signature_final.pt` | Chemin du modele YOLO a l'interieur du conteneur |
+| `MODULES_PATH` | api | `/app/modules` | Chemin des modules partages (comparaison, scoring, llm, identification_signataires) |
+| `OLLAMA_URL` | api | `http://ollama:11434/api/generate` | **Doit imperativement inclure `/api/generate`** -- une URL sans ce chemin provoque une erreur `405 Method Not Allowed` cote Ollama |
+| `SIGNATURE_SERVICE_URL` | api | `http://signature:8002` | Nom de service Docker, pas `localhost` |
+| `OCR_SERVICE_URL` | api | `http://ocr:8001` | Nom de service Docker, pas `localhost` |
 
-### 2. Construire et lancer tous les services
+## Etapes de deploiement
+
+### 1. Verifier que le modele est present
 
 ```bash
-cd docker
-docker compose up --build -d
+ls models/yolov8s_signature_final.pt
 ```
 
-### 3. Télécharger le modèle Ollama (une seule fois)
+Ce fichier doit exister a la racine du dossier `models/` (~67 Mo) -- il est monte en volume, pas copie dans l'image.
+
+### 2. Construire toutes les images
+
+```bash
+docker compose build --no-cache
+```
+
+Le `--no-cache` est recommande pour un premier build ou apres une mise a jour du code, afin d'eviter que Docker reutilise une couche en cache perimee.
+
+### 3. Lancer tous les services
+
+```bash
+docker compose up -d
+```
+
+### 4. Telecharger le modele Ollama (une seule fois, obligatoire)
 
 ```bash
 docker exec -it ollama_service ollama pull qwen2.5:7b
 ```
 
-### 4. Vérifier que tout tourne
+Sans cette etape, le service API demarre normalement mais toute requete de verification echouera a l'etape d'extraction LLM.
+
+### 5. Verifier que tout tourne
 
 ```bash
 docker compose ps
 ```
 
-Chaque service doit être à l'état "Up". Testez ensuite :
+Les 4 services (`api_principale`, `ocr_service`, `signature_service`, `ollama_service`) doivent etre a l'etat `Up`, sans `Restarting`.
 
-```bash
-curl http://localhost:8000/
-curl http://localhost:8001/
-curl http://localhost:8002/
-curl http://localhost:11434/
+Testez ensuite chaque service (sous PowerShell, utiliser `curl.exe`, pas l'alias `curl`) :
+
+```powershell
+curl.exe http://localhost:8000/
+curl.exe http://localhost:8001/
+curl.exe http://localhost:8002/
+curl.exe http://localhost:11434/
 ```
 
-### 5. Tester le pipeline complet
+Chaque commande doit retourner un JSON de statut (ou "Ollama is running" pour le dernier).
 
-Utilisez Bruno/Postman ou la plateforme de simulation, en pointant vers `http://localhost:8000/api/version1/verify` comme d'habitude — le comportement est identique à l'exécution locale, seule l'infrastructure change.
+### 6. Tester le pipeline complet
+
+```
+POST http://localhost:8000/api/version1/verify
+```
+
+Body multipart/form-data avec un champ `fichier` (PDF) et un champ `donnees_rh` (JSON). Voir le README principal du projet pour le format exact.
+
+## Fonctionnement sans GPU
+
+Si le serveur cible n'a pas de GPU, retirer les blocs suivants de `docker-compose.yml` pour chaque service concerne (`signature`, `ocr`, `ollama`) :
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+```
+
+Le systeme reste fonctionnel sur CPU, mais le temps de traitement augmente significativement : l'etape OCR passe d'environ 7 secondes (GPU) a environ 60-70 secondes (CPU), et l'extraction LLM (Ollama, modele 7B) peut prendre plusieurs minutes sur CPU. **Pour un usage en production sans GPU, un passage en traitement asynchrone (reponse immediate + statut consultable) est fortement recommande plutot qu'un appel HTTP synchrone bloquant.**
+
+## Problemes connus et deja resolus (a ne pas reintroduire)
+
+Ces problemes sont deja corriges dans les `Dockerfile` fournis. Ils sont documentes ici pour eviter de les reintroduire lors d'une modification future :
+
+- **Conflit NumPy/OpenCV** : installer `ultralytics` sans `--no-deps` peut entrainer l'installation simultanee de `opencv-python` ET `opencv-python-headless`, provoquant une erreur `RuntimeError: Numpy is not available` au moment de l'inference (pas au chargement du modele). Le Dockerfile du service `signature` installe `ultralytics` avec `--no-deps` et liste explicitement ses dependances avec des versions figees pour eviter ce conflit.
+- **`filelock` obsolete** : l'image de base `pytorch/pytorch` embarque une version de `filelock` trop ancienne pour Ultralytics recent (`AsyncFileLock` manquant). Le Dockerfile fixe explicitement `filelock>=3.16.1`.
+- **Contexte de build de l'API** : le service `api` a besoin du dossier `modules/` situe a la racine du projet, hors de `services/api/`. Le `docker-compose.yml` utilise donc `context: .` avec `dockerfile: services/api/Dockerfile` pour ce service specifiquement (different des 2 autres services).
 
 ## Commandes utiles
 
@@ -85,8 +143,12 @@ Utilisez Bruno/Postman ou la plateforme de simulation, en pointant vers `http://
 # Voir les logs d'un service en temps reel
 docker compose logs -f signature
 
-# Redemarrer un seul service (apres modification du code)
-docker compose up --build -d signature
+# Reconstruire et redemarrer un seul service (apres modification du code)
+docker compose build --no-cache signature
+docker compose up -d --force-recreate signature
+
+# Verifier les versions de packages installes dans un conteneur (diagnostic)
+docker exec -it signature_service pip list | findstr opencv
 
 # Tout arreter
 docker compose down
@@ -95,8 +157,8 @@ docker compose down
 docker compose down -v
 ```
 
-## Notes importantes
+## Notes complementaires
 
-- **Portabilité** : cette configuration résout la limite connue des chemins Windows codés en dur (`POPPLER_PATH`) — `poppler-utils` est installé nativement dans les images Linux, le code bascule automatiquement (`platform.system() != "Windows"` → `POPPLER_PATH = None`).
-- **GPU partagé** : les 3 services demandant un GPU (Signature, OCR, Ollama) peuvent tourner simultanément sur un seul GPU si sa VRAM est suffisante (cf. cahier des charges — empreinte cumulée largement sous 8 Go).
-- **Sans GPU disponible** : retirer les blocs `deploy.resources.reservations.devices` de chaque service dans `docker-compose.yml` pour forcer un fonctionnement CPU (fonctionnel mais nettement plus lent, notamment pour l'OCR).
+- **Portabilite** : cette configuration resout la limite des chemins Windows codes en dur (`POPPLER_PATH`) -- `poppler-utils` est installe nativement dans les images Linux.
+- **GPU partage** : les services demandant un GPU (Signature, OCR, Ollama) peuvent tourner simultanement sur un seul GPU si sa VRAM est suffisante (empreinte cumulee largement sous 8 Go dans nos tests).
+- **Validation** : cette configuration a ete testee de bout en bout (test complet du pipeline avec un contrat reel, resultat conforme a l'execution locale).
