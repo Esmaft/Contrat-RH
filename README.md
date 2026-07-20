@@ -1,6 +1,6 @@
 # Système de Vérification Automatique de Contrats RH
 
-Projet de Fin d'Année (PFA) — Vérification automatisée de contrats RH par analyse de signature, OCR et extraction de champs via LLM.
+Projet de Fin d'Année (PFA) — Conception et Développement d'une Architecture Microservices pour la Détection de Signature et la Vérification Automatisée de Contrats de Travail
 
 **Auteur** : Asma EL FATIMI
 
@@ -20,7 +20,7 @@ Automatiser la vérification de contrats RH (PDF) en combinant :
 Le système est organisé en microservices FastAPI indépendants :
 
 ```
-Plateforme RH IMRASOFT
+Plateforme RH 
         |
         | POST /api/version1/verify (fichier PDF + donnees_rh)
         v
@@ -35,8 +35,6 @@ Plateforme RH IMRASOFT
 | (8002)  |      | (8001) |      |  (11434) |
 +--------+      +--------+      +----------+
 ```
-
-Le module `modules/identification_signataires.py` n'est pas un service séparé : il est appelé directement par l'API principale, en croisant les résultats des services Signature et OCR.
 
 ### Pipeline de traitement (ordre optimisé pour la performance)
 
@@ -72,7 +70,7 @@ Pour chaque signature détectée par YOLO (position x, y), le système cherche l
 
 - **Architecture** : YOLOv8s (Ultralytics)
 - **Dataset** : fusion de sources annotées (Roboflow + Tobacco800), nettoyage des formats mixtes segmentation/detection, re-split train/val équilibré
-- **Résultats finaux** (epoch 91) :
+- **Résultats finaux** (epoch 100) :
 
 | Métrique | Score |
 |---|---|
@@ -162,3 +160,4 @@ POST http://localhost:8000/api/version1/verify
 - Référentiel de templates par entreprise pour affiner les règles de validation
 - Portabilité Linux complète (chemins actuellement codés pour Windows) -- *partiellement couverte par la conteneurisation Docker, section 5.1*
 - Gestion de la concurrence à l'échelle infrastructure (file d'attente distribuée, plusieurs instances/GPU) -- la contention GPU au sein d'un même serveur est déjà gérée au niveau du code (sémaphores, section 7) ; ce point ne concerne que le dimensionnement à plus grande échelle (plusieurs serveurs, load balancing)
+
