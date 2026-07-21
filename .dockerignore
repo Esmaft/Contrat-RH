@@ -1,0 +1,33 @@
+# Dataset et fichiers volumineux -- inutiles pour le build des images
+dataset_final/
+signature_dataset_combined/
+signature_dataset_resplit/
+verif_bbox/
+verif_conversion/
+
+# Fichiers temporaires generes a l'execution
+images_pretraitees/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Git et documentation -- inutiles dans le contexte de build
+.git/
+.gitignore
+*.md
+
+# Environnements / IDE
+venv/
+.venv/
+.vscode/
+.idea/
+
+# Documents de test et scripts d'entrainement -- pas necessaires pour construire les images
+contrats_test/
+scripts/
+
+# Fichiers systeme
+.DS_Store
+Thumbs.db
