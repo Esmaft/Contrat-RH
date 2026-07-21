@@ -127,7 +127,7 @@ Si le serveur cible n'a pas de GPU, retirer les blocs suivants de `docker-compos
               capabilities: [gpu]
 ```
 
-Le systeme reste fonctionnel sur CPU, mais le temps de traitement augmente significativement : l'etape OCR passe d'environ 7 secondes (GPU) a environ 60-70 secondes (CPU), et l'extraction LLM (Ollama, modele 7B) peut prendre plusieurs minutes sur CPU. **Pour un usage en production sans GPU, un passage en traitement asynchrone (reponse immediate + statut consultable) est fortement recommande plutot qu'un appel HTTP synchrone bloquant.**
+Le systeme reste fonctionnel sur CPU, mais le temps de traitement augmente significativement : l'etape OCR passe d'environ 7 secondes (GPU) a environ 60-70 secondes (CPU), et l'extraction LLM (Ollama, modele 7B) peut prendre plusieurs minutes sur CPU. 
 
 ## Problemes connus et deja resolus (a ne pas reintroduire)
 
