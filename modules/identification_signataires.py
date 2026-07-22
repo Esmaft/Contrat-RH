@@ -7,42 +7,33 @@ a quel role elle correspond (employe, representant de l'entreprise, ou
 tout autre role additionnel declare -- garant, temoin, etc.) -- sans
 saisie manuelle : les noms attendus proviennent tous de donnees_rh.
 
-Principe general
------------------
-1. Le service Signature (YOLOv8) fournit la position (x, y) normalisee de
-   chaque signature detectee, ainsi que le numero de page ou elle se trouve.
-2. Le service OCR (DocTR) fournit la position (x, y) normalisee de chaque
-   mot reconnu sur le document.
-3. Pour chaque signature, on cherche geometriquement le nom le plus proche
-   (fenetre glissante de 2 mots), puis on verifie que ce texte correspond
-   suffisamment a chacun des noms attendus (RapidFuzz), et on retient le
-   role dont le nom correspond le mieux.
-4. Verification renforcee : chaque token du nom (prenom ET nom de famille)
-   doit etre retrouve individuellement a proximite, pour eviter les faux
-   positifs par simple coincidence de sous-chaine.
+Strategie a DEUX NIVEAUX (ajoutee suite a un test sur un contrat reel
+IMRASOFT dont le bloc de signature ne repete jamais le nom du signataire,
+seulement des libelles generiques "L'EMPLOYEUR" / "LE/LA SALARIE(E)") :
 
-Roles et regle d'acceptation
-------------------------------
-Les roles attendus sont fournis sous forme d'un dictionnaire
-{nom_du_role: nom_de_la_personne}, par exemple :
-    {"employe": "Youssef Idrissi", "entreprise": "Hicham Benabdellah",
-     "garant": "Amine Ziani"}
+  Niveau 1 -- Matching par NOM (methode principale, la plus fiable) :
+    cherche le nom de la personne (full_name, representer, etc.) le plus
+    proche geometriquement de la signature.
 
-- Le role "employe" est TOUJOURS obligatoire.
-- Tout autre role n'est obligatoire QUE SI son nom est non vide dans le
-  dictionnaire -- ainsi, un contrat sans garant declare (champ absent ou
-  vide dans donnees_rh) n'exigera pas de signature de garant, mais un
-  contrat qui en declare un verra cette signature verifiee comme les
-  autres, automatiquement, sans saisie manuelle supplementaire.
+  Niveau 2 -- Matching par LIBELLE DE ROLE (filet de secours) :
+    n'est utilise QUE si AUCUN texte ressemblant a un nom n'a ete trouve
+    du tout a proximite de la signature (aucun role n'atteint meme un
+    score de similarite faible). Dans ce cas seulement, on cherche un
+    libelle generique associe au role ("Employeur", "Salarie(e)").
 
-Limites connues (documentees, non resolues par design)
---------------------------------------------------------
-- Si l'encre d'une signature manuscrite recouvre physiquement une partie
-  du nom imprime, l'OCR peut echouer a lire ce mot correctement. Un score
-  de similarite globale tres eleve (>= SEUIL_SCORE_FORT) sert alors de
-  filet de secours, meme sans couverture complete des tokens. Ce seuil a
-  ete calibre sur un nombre limite d'exemples reels et pourrait necessiter
-  un ajustement avec davantage de donnees.
+    IMPORTANT (correction suite a regression detectee lors des tests) :
+    si un texte ressemblant a un nom EXISTE a proximite mais ne
+    correspond a AUCUN nom attendu (ex: mauvais nom, personne differente),
+    le Niveau 2 est desactive pour CETTE signature -- on ne bascule pas
+    sur un libelle generique juste parce que le nom trouve est incorrect.
+    Sans cette regle, un document contenant a la fois un nom errone ET
+    un libelle de role ("Salarie", "Employeur") aurait ete valide a tort,
+    le libelle rescue masquant le vrai probleme (mauvaise personne).
+
+Limite assumee : si un document ne contient NI nom NI libelle de role a
+proximite d'une signature (signature totalement anonyme), il est
+techniquement impossible de determiner a qui elle appartient a partir du
+contenu du document seul.
 """
 
 from rapidfuzz import fuzz
@@ -52,14 +43,29 @@ RAYON_RECHERCHE = 0.15
 SEUIL_SIMILARITE = 65
 SEUIL_TOKEN = 65
 SEUIL_SCORE_FORT = 80
+SEUIL_LIBELLE_ROLE = 70
+SEUIL_PRESENCE_NOM = 60  # au-dela, on considere qu'un texte "ressemblant a un nom" existe deja
 TOLERANCE_SOUS_SIGNATURE = 0.015
 TOLERANCE_SOUS_SIGNATURE_TOKEN = 0.05
 
-ROLE_OBLIGATOIRE = "employe"  
+ROLE_OBLIGATOIRE = "employe"
+
+LIBELLES_PAR_ROLE = {
+    "employe": [
+        "salarie", "salariee", "le salarie", "la salariee",
+        "le/la salarie", "employe", "employee",
+    ],
+    "entreprise": [
+        "employeur", "l'employeur", "societe", "gerant",
+        "directeur general", "representant",
+    ],
+    "garant": [
+        "garant", "caution", "le garant",
+    ],
+}
 
 
 def normaliser_texte(texte):
-    """Minuscules et suppression des accents, pour une comparaison robuste."""
     texte = str(texte).lower().strip()
     texte = unicodedata.normalize('NFD', texte)
     return ''.join(c for c in texte if unicodedata.category(c) != 'Mn')
@@ -133,24 +139,22 @@ def _meilleur_match(proches, nom_cible_norm, seuil_similarite):
     return meilleur_texte, meilleur_score, meilleure_distance, False
 
 
+def _match_libelle_role(mots_proches_norm, role):
+    libelles = LIBELLES_PAR_ROLE.get(role, [])
+    if not libelles or not mots_proches_norm:
+        return False, None, 0
+    meilleur_score, meilleur_libelle = 0, None
+    for libelle in libelles:
+        for mot in mots_proches_norm:
+            score = fuzz.partial_ratio(mot, normaliser_texte(libelle))
+            if score > meilleur_score:
+                meilleur_score, meilleur_libelle = score, libelle
+    return meilleur_score >= SEUIL_LIBELLE_ROLE, meilleur_libelle, meilleur_score
+
+
 def identifier_signataires(signatures, mots_positions, roles_attendus,
                             rayon_max=RAYON_RECHERCHE, seuil_similarite=SEUIL_SIMILARITE,
                             seuil_token=SEUIL_TOKEN):
-    """
-    Identifie, pour chaque signature detectee, a quel role elle correspond
-    parmi ceux fournis dans roles_attendus.
-
-    Args:
-        signatures: liste de dicts {"x_center", "y_center", "confidence", "page"}
-        mots_positions: liste de dicts {"mot", "x_center", "y_center", "page"}
-        roles_attendus: dict {nom_du_role: nom_de_la_personne}, ex:
-            {"employe": "Youssef Idrissi", "entreprise": "Hicham Benabdellah"}
-            Un role dont le nom est vide/absent n'est pas exige (sauf
-            ROLE_OBLIGATOIRE, toujours requis).
-
-    Returns:
-        (bool, str|None, list[dict]): (validite, motif de rejet, detail par signature)
-    """
     if not signatures:
         return False, "Aucune signature detectee sur le document", []
 
@@ -171,21 +175,58 @@ def identifier_signataires(signatures, mots_positions, roles_attendus,
             sig["x_center"], sig["y_center"], page_sig, mots_positions, rayon_max + 0.05
         )
 
-        # Calcule le match de cette signature contre CHAQUE role attendu,
-        # et retient celui dont le nom correspond le mieux (score le plus haut).
-        scores_par_role = {}
+        # Etape A : calcule le matching par NOM pour tous les roles d'abord,
+        # sans encore decider d'activer le filet de secours.
+        resultats_bruts = {}
         for role, nom_norm in roles_normalises.items():
             texte, score, dist, brut = _meilleur_match(proches, nom_norm, seuil_similarite)
             couverture = _couverture_tous_tokens(mots_proches_norm, nom_norm, seuil_token)
-            match = brut and (couverture or score >= SEUIL_SCORE_FORT)
+            match_nom = brut and (couverture or score >= SEUIL_SCORE_FORT)
+            resultats_bruts[role] = {
+                "texte": texte, "score": score, "dist": dist, "match_nom": match_nom,
+            }
+
+        # Un texte "ressemblant a un nom" existe-t-il a proximite, meme si
+        # il ne correspond a AUCUN nom attendu ? Si oui, on desactive le
+        # filet de secours pour CETTE signature (evite qu'un mauvais nom
+        # soit "rattrape" a tort par un libelle generique).
+        meilleur_score_nom_global = max((r["score"] for r in resultats_bruts.values()), default=0)
+        nom_present_a_proximite = meilleur_score_nom_global >= SEUIL_PRESENCE_NOM
+
+        scores_par_role = {}
+        for role, res in resultats_bruts.items():
+            if res["match_nom"]:
+                scores_par_role[role] = {
+                    "nom_trouve": res["texte"], "distance": res["dist"], "score": res["score"],
+                    "correspond": True, "methode": "nom",
+                }
+                continue
+
+            if nom_present_a_proximite:
+                # Un nom (meme incorrect) est present -> pas de filet de
+                # secours, on reste sur un rejet honnete pour ce role.
+                scores_par_role[role] = {
+                    "nom_trouve": res["texte"], "distance": res["dist"], "score": res["score"],
+                    "correspond": False, "methode": "aucun",
+                }
+                continue
+
+            # Niveau 2 -- aucun nom du tout trouve a proximite -> filet de
+            # secours par libelle de role generique.
+            match_libelle, libelle_trouve, score_libelle = _match_libelle_role(mots_proches_norm, role)
             scores_par_role[role] = {
-                "nom_trouve": texte, "distance": dist, "score": score,
-                "couverture_tokens": couverture, "correspond": match,
+                "nom_trouve": libelle_trouve if match_libelle else res["texte"],
+                "distance": res["dist"],
+                "score": score_libelle if match_libelle else res["score"],
+                "correspond": match_libelle,
+                "methode": "libelle_role" if match_libelle else "aucun",
             }
 
         roles_matches = [r for r, v in scores_par_role.items() if v["correspond"]]
         if roles_matches:
-            role_retenu = min(roles_matches, key=lambda r: scores_par_role[r]["distance"] or 0)
+            roles_par_nom = [r for r in roles_matches if scores_par_role[r]["methode"] == "nom"]
+            candidats_role = roles_par_nom or roles_matches
+            role_retenu = min(candidats_role, key=lambda r: scores_par_role[r]["distance"] or 0)
         else:
             role_retenu = "inconnu"
 
@@ -198,12 +239,12 @@ def identifier_signataires(signatures, mots_positions, roles_attendus,
                     "distance": round(v["distance"], 4) if v["distance"] is not None else None,
                     "score": round(v["score"], 1),
                     "correspond": v["correspond"],
+                    "methode": v["methode"],
                 }
                 for role, v in scores_par_role.items()
             },
         })
 
-    # Chaque role a verifier doit etre matche par AU MOINS une signature.
     for role in roles_a_verifier:
         role_trouve = any(
             d["matches_par_role"].get(role, {}).get("correspond") for d in detail
