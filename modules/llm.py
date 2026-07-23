@@ -11,6 +11,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 MODELE_LLM = "qwen2.5:7b"
 print(f"Modele LLM charge : {MODELE_LLM}")
 
+
 def extraire_champs_llm(texte_ocr):
     """
     Envoie le texte OCR au LLM Qwen et extrait les champs du contrat.
@@ -40,7 +41,7 @@ Lis attentivement le contrat et extrais TOUS les champs suivants. Cherche bien d
 - birth_date : date de naissance au format JJ/MM/AAAA (cherche après "né le" ou "née le")
 - salary : salaire ou indemnité total mensuel brut (nombre uniquement).
   ATTENTION : prendre le TOTAL (ex: 8500), pas les composantes individuelles.
-  "2 500,00" = 2500, "12 500,00" = 12500, "3 750,00" = 3750.
+  "2 500,00" = 2500, "12 500,00" = 12500, "3 750,00" = 3750, "3422.72" = 3422.72.
 - start_date : date de début au format JJ/MM/AAAA
 - end_date : date de fin au format JJ/MM/AAAA (ou null si CDI)
 
@@ -61,13 +62,37 @@ Réponds uniquement avec le JSON."""
             "options": {"temperature": 0, "seed": 42}
         }
     )
-    
-    # Debug temporaire
+
     print(f"Status : {response.status_code}")
 
     resultat = response.json()["response"]
     champs = json.loads(resultat)
     return _nettoyer_champs(champs)
+
+
+def _nettoyer_valeur_numerique(valeur):
+    """
+    Nettoie un nombre pouvant contenir des espaces (separateurs de
+    milliers), une virgule OU un point comme separateur decimal.
+    Gere : "12 500,00" -> 12500 | "3422.72" -> 3422 (arrondi entier)
+
+    Corrige un bug ou ".replace('.', '')" supprimait a tort le point
+    decimal legitime des nombres au format anglo-saxon (ex: 3422.72
+    devenait 342272 au lieu de 3422).
+    """
+    texte = str(valeur).replace(" ", "").strip()
+    texte = texte.replace(",", ".")
+
+    if texte.count(".") > 1:
+        # Plusieurs points : le dernier est le separateur decimal,
+        # les precedents sont des separateurs de milliers
+        parties = texte.split(".")
+        texte = "".join(parties[:-1]) + "." + parties[-1]
+
+    try:
+        return int(float(texte))
+    except ValueError:
+        return None
 
 
 def _nettoyer_champs(champs):
@@ -91,10 +116,9 @@ def _nettoyer_champs(champs):
 
         if valeur is not None and valeur != "":
             if cle in ["salary", "company_capital"]:
-                valeur_nettoyee = str(valeur).replace(" ", "").replace(".", "").split(",")[0]
-                valeur_nettoyee = "".join(c for c in valeur_nettoyee if c.isdigit())
-                if valeur_nettoyee:
-                    champs_propres[cle] = int(valeur_nettoyee)
+                valeur_nettoyee = _nettoyer_valeur_numerique(valeur)
+                if valeur_nettoyee is not None:
+                    champs_propres[cle] = valeur_nettoyee
             elif cle in ["full_name", "representer"]:
                 nom = str(valeur)
                 for civilite in ["Monsieur ", "Madame ", "M. ", "Mme ", "Mlle "]:
